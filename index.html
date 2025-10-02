@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Handball Court Game</title>
+    <style>
+        /*
+        Global Styling
+        */
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #1e3a8a, #0c4a6e); /* Deep Blue Gradient */
+            font-family: 'Inter', sans-serif;
+            color: #ffffff;
+            user-select: none;
+            overflow: hidden; /* Prevent scrolling */
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border-radius: 20px;
+            padding: 20px;
+            background-color: #0d1a33; /* Dark background for score/info */
+        }
+
+        /*
+        Canvas Styling
+        */
+        canvas {
+            display: block;
+            border: 4px solid #ffffff;
+            border-radius: 10px;
+            background-color: #22c55e; /* Vibrant Green Court */
+            touch-action: none; /* Disable default touch actions */
+            max-width: 95vw;
+            max-height: 80vh;
+        }
+
+        /*
+        Scoreboard and Info Styling
+        */
+        .scoreboard {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 800px;
+            margin-bottom: 15px;
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+
+        .player-info {
+            padding: 10px 20px;
+            border-radius: 10px;
+            text-align: center;
+            min-width: 150px;
+            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.3);
+        }
+
+        #score-p1 { background-color: #ef4444; } /* Red */
+        #score-p2 { background-color: #3b82f6; } /* Blue */
+        
+        .controls-info {
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.9rem;
+            opacity: 0.8;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+        }
+
+        .controls-info strong {
+            color: #fcd34d;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="game-container">
+        <!-- Scoreboard -->
+        <div class="scoreboard">
+            <div id="score-p1" class="player-info">P1 (Red): 0</div>
+            <div id="score-p2" class="player-info">P2 (Blue): 0</div>
+        </div>
+
+        <!-- Game Canvas -->
+        <canvas id="handballCanvas" width="800" height="500"></canvas>
+
+        <!-- Controls Information -->
+        <div class="controls-info">
+            <p><strong>Player 1 (Red) Controls:</strong> Move with W, A, S, D.</p>
+            <p><strong>Player 2 (Blue) Controls:</strong> Move with Up, Down, Left, Right Arrow Keys.</p>
+            <p>The ball is "pushed" when a player collides with it!</p>
+        </div>
+    </div>
+
+    <script>
+        // Game Constants and Initialization
+        const canvas = document.getElementById('handballCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Dimensions
+        const COURT_WIDTH = canvas.width;
+        const COURT_HEIGHT = canvas.height;
+        const PLAYER_RADIUS = 20;
+        const BALL_RADIUS = 12;
+        const GOAL_WIDTH = 30; // Depth of the goal area
+        const GOAL_HEIGHT = 160; // Height of the scoring line
+
+        // Game State
+        let score = { p1: 0, p2: 0 };
+        let isGameRunning = false;
+        let lastTime = 0;
+        const FPS = 60;
+        const frameTime = 1000 / FPS;
+
+        // --- Game Objects ---
+
+        // Player 1 (Red)
+        let player1 = {
+            x: COURT_WIDTH * 0.25,
+            y: COURT_HEIGHT / 2,
+            radius: PLAYER_RADIUS,
+            color: '#ef4444',
+            speed: 5,
+            vx: 0,
+            vy: 0,
+            keys: { up: 'w', down: 's', left: 'a', right: 'd' }
+        };
+
+        // Player 2 (Blue)
+        let player2 = {
+            x: COURT_WIDTH * 0.75,
+            y: COURT_HEIGHT / 2,
+            radius: PLAYER_RADIUS,
+            color: '#3b82f6',
+            speed: 5,
+            vx: 0,
+            vy: 0,
+            keys: { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' }
+        };
+
+        // Ball
+        let ball = {
+            x: COURT_WIDTH / 2,
+            y: COURT_HEIGHT / 2,
+            radius: BALL_RADIUS,
+            color: '#fcd34d', // Yellow/Gold
+            vx: 0,
+            vy: 0,
+            friction: 0.99,
+            maxSpeed: 10
+        };
+
+        // Input
+        let keysPressed = {};
+        
+        // --- Audio Context for simple sounds ---
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+        
+        // Simple Sound Generator (Beep)
+        function playBeep(frequency = 440, duration = 0.1, volume = 0.5) {
+            if (!audioCtx) return;
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.frequency.value = frequency;
+            gainNode.gain.value = volume;
+
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + duration);
+        }
+
+        // --- Core Functions ---
+
+        function setupGame() {
+            // Event listeners for input
+            window.addEventListener('keydown', (e) => { keysPressed[e.key] = true; });
+            window.addEventListener('keyup', (e) => { keysPressed[e.key] = false; });
+            
+            // Start the game loop
+            isGameRunning = true;
+            requestAnimationFrame(gameLoop);
+        }
+
+        function resetBall(scorer) {
+            ball.x = COURT_WIDTH / 2;
+            ball.y = COURT_HEIGHT / 2;
+            ball.vx = 0;
+            ball.vy = 0;
+
+            // Give a slight kick to the non-scorer
+            if (scorer === player1) {
+                ball.vx = 4;
+            } else if (scorer === player2) {
+                ball.vx = -4;
+            }
+            
+            player1.x = COURT_WIDTH * 0.25;
+            player1.y = COURT_HEIGHT / 2;
+            player2.x = COURT_WIDTH * 0.75;
+            player2.y = COURT_HEIGHT / 2;
+            player1.vx = player1.vy = 0;
+            player2.vx = player2.vy = 0;
+        }
+
+        function updateScoreboard() {
+            document.getElementById('score-p1').textContent = `P1 (Red): ${score.p1}`;
+            document.getElementById('score-p2').textContent = `P2 (Blue): ${score.p2}`;
+        }
+
+        // --- Drawing ---
+
+        function drawCourt() {
+            // Center Line
+            ctx.beginPath();
+            ctx.moveTo(COURT_WIDTH / 2, 0);
+            ctx.lineTo(COURT_WIDTH / 2, COURT_HEIGHT);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.closePath();
+
+            // Center Circle
+            ctx.beginPath();
+            ctx.arc(COURT_WIDTH / 2, COURT_HEIGHT / 2, 50, 0, 2 * Math.PI);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.closePath();
+
+            // Goal Areas (D-Zone/6-meter line approx)
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 2;
+
+            // Left Goal Area
+            ctx.beginPath();
+            ctx.rect(5, COURT_HEIGHT / 2 - GOAL_HEIGHT / 2 - 5, 100, GOAL_HEIGHT + 10);
+            ctx.stroke();
+
+            // Right Goal Area
+            ctx.beginPath();
+            ctx.rect(COURT_WIDTH - 105, COURT_HEIGHT / 2 - GOAL_HEIGHT / 2 - 5, 100, GOAL_HEIGHT + 10);
+            ctx.stroke();
+        }
+
+        function drawGoal(x, y, color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x, COURT_HEIGHT / 2 - GOAL_HEIGHT / 2, GOAL_WIDTH, GOAL_HEIGHT);
+        }
+
+        function drawPlayer(player) {
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fillStyle = player.color;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = player.color;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.closePath();
+        }
+
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = ball.color;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = ball.color;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#0d1a33';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.closePath();
+        }
+
+        function drawGame() {
+            // Clear canvas
+            ctx.clearRect(0, 0, COURT_WIDTH, COURT_HEIGHT);
+
+            // 1. Draw Court Markings
+            drawCourt();
+
+            // 2. Draw Goals
+            drawGoal(0, COURT_HEIGHT / 2, '#880000'); // Left (P1 goal)
+            drawGoal(COURT_WIDTH - GOAL_WIDTH, COURT_HEIGHT / 2, '#000088'); // Right (P2 goal)
+
+            // 3. Draw Players and Ball
+            drawPlayer(player1);
+            drawPlayer(player2);
+            drawBall();
+        }
+
+        // --- Logic ---
+
+        function handleInput(player, isP1) {
+            player.vx = 0;
+            player.vy = 0;
+            let moved = false;
+
+            if (keysPressed[player.keys.up]) { player.vy = -player.speed; moved = true; }
+            if (keysPressed[player.keys.down]) { player.vy = player.speed; moved = true; }
+            if (keysPressed[player.keys.left]) { player.vx = -player.speed; moved = true; }
+            if (keysPressed[player.keys.right]) { player.vx = player.speed; moved = true; }
+            
+            // Normalize diagonal movement speed
+            if (moved && player.vx !== 0 && player.vy !== 0) {
+                const diagSpeed = player.speed / Math.sqrt(2);
+                player.vx = player.vx > 0 ? diagSpeed : -diagSpeed;
+                player.vy = player.vy > 0 ? diagSpeed : -diagSpeed;
+            }
+
+            // Apply movement
+            player.x += player.vx;
+            player.y += player.vy;
+
+            // Player boundary and half-court constraint
+            const halfCourt = COURT_WIDTH / 2;
+            const minX = player.radius;
+            const maxX = COURT_WIDTH - player.radius;
+            const minY = player.radius;
+            const maxY = COURT_HEIGHT - player.radius;
+
+            // Horizontal boundary (Court walls + Half-court)
+            if (isP1) {
+                player.x = Math.max(minX, Math.min(halfCourt - player.radius / 2, player.x));
+            } else {
+                player.x = Math.max(halfCourt + player.radius / 2, Math.min(maxX, player.x));
+            }
+
+            // Vertical boundary (Court walls)
+            player.y = Math.max(minY, Math.min(maxY, player.y));
+        }
+
+        function updateBall() {
+            // 1. Apply friction and move
+            ball.vx *= ball.friction;
+            ball.vy *= ball.friction;
+            
+            // Limit max speed
+            let speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+            if (speed > ball.maxSpeed) {
+                ball.vx = (ball.vx / speed) * ball.maxSpeed;
+                ball.vy = (ball.vy / speed) * ball.maxSpeed;
+            }
+
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+
+            // 2. Wall Collision (Ball)
+            if (ball.x - ball.radius < 0 || ball.x + ball.radius > COURT_WIDTH) {
+                ball.vx *= -1;
+                ball.x = Math.max(ball.radius, Math.min(COURT_WIDTH - ball.radius, ball.x)); // Clamp
+                playBeep(200, 0.05, 0.4);
+            }
+            if (ball.y - ball.radius < 0 || ball.y + ball.radius > COURT_HEIGHT) {
+                ball.vy *= -1;
+                ball.y = Math.max(ball.radius, Math.min(COURT_HEIGHT - ball.radius, ball.y)); // Clamp
+                playBeep(200, 0.05, 0.4);
+            }
+        }
+        
+        // Simple 2D Vector: Distance between (x1, y1) and (x2, y2)
+        function distSq(x1, y1, x2, y2) {
+            return (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2);
+        }
+
+        // Ball-Player Collision (Basic Impulse/Push)
+        function checkBallPlayerCollision(player) {
+            const dx = ball.x - player.x;
+            const dy = ball.y - player.y;
+            const distanceSquared = dx * dx + dy * dy;
+            const minDistance = ball.radius + player.radius;
+            const minDistanceSquared = minDistance * minDistance;
+
+            if (distanceSquared < minDistanceSquared) {
+                playBeep(350, 0.08, 0.6);
+
+                // Calculate the overlap
+                const distance = Math.sqrt(distanceSquared);
+                const overlap = minDistance - distance;
+
+                // Push the ball away to resolve collision
+                const normalX = dx / distance;
+                const normalY = dy / distance;
+
+                ball.x += normalX * overlap * 1.05; // Move slightly more than overlap
+                ball.y += normalY * overlap * 1.05;
+
+                // Calculate the push vector based on player's current speed
+                const playerSpeed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+                let pushStrength = 0.5 + (playerSpeed / 10); // Base push + scaled by player speed
+
+                // Apply new velocity to the ball (elastic collision approximation)
+                ball.vx = normalX * pushStrength * 8;
+                ball.vy = normalY * pushStrength * 8;
+            }
+        }
+
+        // Goal Check
+        function checkGoal() {
+            // Left Goal (Player 2 scores)
+            const goalTop = COURT_HEIGHT / 2 - GOAL_HEIGHT / 2;
+            const goalBottom = COURT_HEIGHT / 2 + GOAL_HEIGHT / 2;
+
+            if (ball.x - ball.radius <= GOAL_WIDTH && ball.y > goalTop && ball.y < goalBottom) {
+                score.p2++;
+                updateScoreboard();
+                resetBall(player2);
+                playBeep(600, 0.5, 0.8); // High-pitch goal sound
+                return true;
+            }
+
+            // Right Goal (Player 1 scores)
+            if (ball.x + ball.radius >= COURT_WIDTH - GOAL_WIDTH && ball.y > goalTop && ball.y < goalBottom) {
+                score.p1++;
+                updateScoreboard();
+                resetBall(player1);
+                playBeep(600, 0.5, 0.8); // High-pitch goal sound
+                return true;
+            }
+            return false;
+        }
+
+
+        // --- Game Loop ---
+        function gameLoop(currentTime) {
+            if (!isGameRunning) return;
+
+            // Control frame rate (optional but good for consistency)
+            const deltaTime = currentTime - lastTime;
+            if (deltaTime < frameTime) {
+                requestAnimationFrame(gameLoop);
+                return;
+            }
+            lastTime = currentTime;
+
+            // 1. Handle Input & Player Movement
+            handleInput(player1, true);
+            handleInput(player2, false);
+
+            // 2. Update Ball Position and Physics
+            updateBall();
+
+            // 3. Collision Checks
+            checkBallPlayerCollision(player1);
+            checkBallPlayerCollision(player2);
+
+            // 4. Goal Check
+            checkGoal();
+
+            // 5. Draw Everything
+            drawGame();
+
+            // Loop
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start the game on window load
+        window.onload = function() {
+            // Set up the responsive canvas size based on parent container
+            const container = document.querySelector('.game-container');
+            const aspectRatio = 800 / 500;
+            let w = container.clientWidth * 0.9;
+            let h = w / aspectRatio;
+
+            if (h > window.innerHeight * 0.8) {
+                h = window.innerHeight * 0.8;
+                w = h * aspectRatio;
+            }
+
+            canvas.width = w;
+            canvas.height = h;
+
+            // Re-map constants to new canvas size if necessary for true scaling
+            // For this simple game, we'll keep the internal drawing coordinates (800x500)
+            // but the CSS will handle the visual scaling, which is a simpler approach for a fixed-aspect-ratio game.
+            
+            updateScoreboard();
+            setupGame();
+        };
+
+    </script>
+</body>
+</html>
